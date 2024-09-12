@@ -1,0 +1,130 @@
+clear;clc;
+
+data_dir = 'G:\2024futong_PLSR\PLSR_FA_sub-WM\';
+% Read gene file
+gene_path =  'G:\2024futong_PLSR\PLSR_FA_sub-WM\PLSR_gene_predictor_vars_Zscore.csv';
+data_gene = readtable(gene_path);
+GENEdata = table2array(data_gene);
+GENEdata = GENEdata';
+
+% MRIdata：The index column vector of the image, the length of which is the number of brain regions
+MRI_path = 'G:\2024futong_PLSR\PLSR_FA_sub-WM\PLSR_MRI_response_vars.csv';
+data_MRI = readtable(MRI_path);
+MRIdata = table2array(data_MRI);
+
+genename_path =  'G:\2024futong_PLSR\PLSR_FA_sub-WM\genename.csv';
+gene_name = readcell(genename_path);
+
+
+geneindex=1:size(GENEdata,2);
+genes = gene_name;
+bootnum=1000;
+X=GENEdata;
+Y=zscore(MRIdata);
+dim=16;
+[XL,YL,XS,YS,BETA,PCTVAR,MSE,stats]=plsregress(X,Y,dim);
+save([data_dir,'PCTVAR.mat'],'PCTVAR')
+
+%% Save the score for the first component
+[R1,p1]=corr(XS(:,1),MRIdata);
+if R1(1,1)<0
+    stats.W(:,1)=-1*stats.W(:,1);
+    XS(:,1)=-1*XS(:,1);
+end
+[PLS1w,x1] = sort(stats.W(:,1),'descend');
+PLS1ids=genes(x1);
+% PLS1ids = genes{x1, 1};
+geneindex1=geneindex(x1);
+PLS1_ROIscores_280=XS(:,1);
+save([data_dir,'PLS1_ROIscore.mat'],'PLS1_ROIscores_280');
+csvwrite([data_dir,'PLS1_ROIscores.csv'],XS(:,1));
+PLS1_score=XS(:,1);
+
+%% Save the score for the second component
+[R2,p2]=corr(XS(:,2),MRIdata);
+if R2(1,1)<0
+    stats.W(:,2)=-1*stats.W(:,2);
+    XS(:,2)=-1*XS(:,2);
+end
+[PLS2w,x2] = sort(stats.W(:,2),'descend');
+PLS2ids=genes(x2);
+% PLS2ids = genes{x2, 1};
+geneindex2=geneindex(x2);
+PLS2_ROIscores_280=XS(:,2);
+save([data_dir,'PLS2_ROIscore.mat'],'PLS2_ROIscores_280');
+csvwrite([data_dir,'PLS2_ROIscores.csv'],XS(:,2));
+PLS2_score=XS(:,2);
+
+PLS1weights = zeros(size(GENEdata,2),1000);
+PLS2weights = zeros(size(GENEdata,2),1000);
+
+% res = zeros(1000,length(region_ind));
+
+%% Make 1000 corrections
+parfor i=1:bootnum
+    myresample = randsample(size(X,1),size(X,1),1);
+    res(i,:)=myresample; %store resampling out of interest
+    Xr=X(myresample,:); % define X for resampled regions
+    Yr=Y(myresample,:); % define Y for resampled regions
+    [XL,YL,XS,YS,BETA,PCTVAR,MSE,stats]=plsregress(Xr,Yr,dim); %perform PLS for resampled data
+
+    temp=stats.W(:,1);%extract PLS1 weights
+    newW=temp(x1); %order the newly obtained weights the same way as initial PLS 
+    if corr(PLS1w,newW)<0 % the sign of PLS components is arbitrary - make sure this aligns between runs
+        newW=-1*newW;
+    end
+    PLS1weights(:,i) = newW;%store (ordered) weights from this bootstrap run
+    
+    temp=stats.W(:,2);%extract PLS2 weights
+    newW=temp(x2); %order the newly obtained weights the same way as initial PLS 
+    if corr(PLS2w,newW)<0 % the sign of PLS components is arbitrary - make sure this aligns between runs
+        newW=-1*newW;
+    end
+    PLS2weights(:,i) = newW; %store (ordered) weights from this bootstrap run    
+end
+
+%% The weight of the first component is corrected
+PLS1sw = std(PLS1weights');
+temp1=PLS1w./PLS1sw';
+[Z1,ind1]=sort(temp1,'descend');
+PLS1=PLS1ids(ind1);
+geneindex1=geneindex1(ind1);
+fid1 = fopen([data_dir,'PLS1_geneWeights.csv'],'w');
+for i=1:length(genes)
+  fprintf(fid1,'%s, %d, %f\n', PLS1{i},geneindex1(i), Z1(i));
+end
+fclose(fid1);
+
+%% The weight of the second component is corrected
+PLS2sw = std(PLS2weights');
+temp2=PLS2w./PLS2sw';
+[Z2,ind2]=sort(temp2,'descend');
+PLS2=PLS2ids(ind2);
+geneindex2=geneindex2(ind2);
+fid2 = fopen([data_dir,'PLS2_geneWeights.csv'],'w');
+for i=1:length(genes)
+  fprintf(fid2,'%s, %d, %f\n', PLS2{i},geneindex2(i), Z2(i));
+end
+fclose(fid2);
+
+
+
+%% Draw variance explanation
+figure(1);
+plot(1:dim,cumsum(100*PCTVAR(2,:)),'-bo');
+xlabel('Number of PLS components');
+ylabel('Percent Variance Explained in y');
+print(gcf,[data_dir,'PLS_Variance_main.tif'],'-dtiff','-r1000')
+
+figure(2);bar(1:16,100*PCTVAR(2,:));
+xlabel('Number of PLS components');
+ylabel('Percent Variance Explained in y');
+title('the percentage of variance explained in Y');
+print(gcf,[data_dir,'PLS_Variance_Explained_in_Y.tif'],'-dtiff','-r1000')
+
+figure(3);
+bar(1:16,100*PCTVAR(1,:));
+xlabel('Number of PLS components');
+ylabel('Percent Variance Explained in x');
+title('the percentage of variance explained in X by each PLS component');
+print(gcf,[data_dir,'PLS_Variance_Explained_in_X.tif'],'-dtiff','-r1000')
